@@ -4,14 +4,28 @@ import cors from 'cors';
 import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
-import logging from 'logging';
+import winston from 'winston';  // Usamos winston para logging
 import { DateTime } from 'luxon';
 import csv from 'csv-stringify';
 import { StringDecoder } from 'string_decoder';
+import * as express from 'express';  // Usar import * as para express
+import * as cors from 'cors';        // Usar import * as para cors
+import * as dotenv from 'dotenv';    // Usar import * as para dotenv
+import * as logging from 'logging';  // Usar import * as para logging
+import * as csv from 'csv-stringify';  // Usar import * as para csv-stringify
 
-// Configuración de logs
-const logger = logging.getLogger(__filename);
-logger.setLevel(logging.INFO);
+
+// Configuración de logs con winston
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+    ),
+    transports: [
+        new winston.transports.Console(),
+    ],
+});
 
 dotenv.config();
 
@@ -45,14 +59,13 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-pro";
 
 // Configurar Gemini API
-// Note: Assuming a similar configuration function exists in the TypeScript library
-// genai.configure({ apiKey: GEMINI_API_KEY });
+// Asegúrate de configurar correctamente la API si se requiere
 
 function generateResponseFromGemini(prompt: string): string {
     try {
         logger.info("Generando respuesta con Gemini para el prompt");
 
-        // Assuming a similar GenerativeModel class exists in the TypeScript library
+        // Asumimos que existe un modelo similar en la librería TypeScript
         const model = new GenerativeModel(GEMINI_MODEL);
         const response = model.generateContent(prompt);
         if (response.parts) {
@@ -146,7 +159,7 @@ function createAnalysisPrompts(vendedorText: string, clienteText: string): any {
     };
 }
 
-app.post("/analyze", (req: Request, res: Response) => {
+app.post("/analyze", async (req: Request, res: Response) => {
     try {
         logger.info("Iniciando análisis de chat.");
         const data = req.body;
@@ -188,10 +201,10 @@ app.post("/analyze", (req: Request, res: Response) => {
 
         const prompts = createAnalysisPrompts(vendedorText, clienteText);
 
-        const greetingsResponse = generateResponseFromGemini(prompts.greetings);
-        const goodbyeResponse = generateResponseFromGemini(prompts.goodbyes);
-        const sentimentResponse = generateResponseFromGemini(prompts.sentiment);
-        const sentimentTagResponse = generateResponseFromGemini(prompts.sentiment_tag);
+        const greetingsResponse = await generateResponseFromGemini(prompts.greetings);
+        const goodbyeResponse = await generateResponseFromGemini(prompts.goodbyes);
+        const sentimentResponse = await generateResponseFromGemini(prompts.sentiment);
+        const sentimentTagResponse = await generateResponseFromGemini(prompts.sentiment_tag);
 
         const greetingsRulePass = processBooleanResponse(greetingsResponse);
         const goodbyeRulePass = processBooleanResponse(goodbyeResponse);
@@ -219,8 +232,8 @@ app.post("/analyze", (req: Request, res: Response) => {
         };
 
         try {
-            const insertedId = chatsCollection.insertOne(chatSummary).insertedId;
-            chatSummary["_id"] = insertedId.toString();
+            const insertedId = await chatsCollection.insertOne(chatSummary);
+            chatSummary["_id"] = insertedId.insertedId.toString();
         } catch (e) {
             logger.error(`Error al guardar en MongoDB: ${e}`);
             return res.status(500).json({ error: "Database error", details: e.toString() });
@@ -234,6 +247,7 @@ app.post("/analyze", (req: Request, res: Response) => {
         return res.status(500).json({ error: "Internal server error", details: e.toString() });
     }
 });
+
 
 app.get("/chats", (req: Request, res: Response) => {
     try {
@@ -429,10 +443,10 @@ app.get("/export/chat_details", (req: Request, res: Response) => {
     }
 });
 
-const port = parseInt(process.env.FLASK_RUN_PORT || "5000");
-const debug = process.env.FLASK_DEBUG?.toLowerCase() === "true";
+// Rutas de exportación y demás código sin cambios significativos
 
-logger.info(`Iniciando servidor Express en puerto ${port} con debug=${debug}`);
+const port = parseInt(process.env.FLASK_RUN_PORT || "5000");
+logger.info(`Iniciando servidor Express en puerto ${port}`);
 app.listen(port, () => {
     logger.info(`Servidor corriendo en puerto ${port}`);
 });
