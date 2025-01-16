@@ -10,22 +10,11 @@
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
-<<<<<<< HEAD
-    "csv-stringify": "^6.5.2",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "fast-csv": "^5.0.2",
-    "logging": "^3.3.0",
-    "luxon": "^3.5.0",
-    "mongodb": "^6.12.0",
-    "string_decoder": "^1.3.0",
-=======
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "fast-csv": "^5.0.2",
     "luxon": "^3.5.0",
     "mongodb": "^6.12.0",
->>>>>>> e08085a (Actualizaciones en app.ts, app.js, package.json, package-lock.json y tsconfig.json)
     "uuid": "^11.0.5",
     "winston": "^3.17.0"
   },
