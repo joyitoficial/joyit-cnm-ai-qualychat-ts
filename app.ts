@@ -51,124 +51,159 @@ let chatDetailsCollection: any;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp"; // Default to gemini-2.0-flash-exp
 const GEMINI_URL = process.env.GEMINI_URL || "https://generativelanguage.googleapis.com/v1beta2/models/gemini-pro:generateText";
+const GEMINI_URL_API_KEY = `${GEMINI_URL}=${GEMINI_API_KEY}`
+console.log("GEMINI_API_KEY", GEMINI_URL_API_KEY)
 
-// Axios function to call Gemini API
-async function generateResponseFromGemini(prompt: string): Promise<string> {
+
+
+const generateResponseFromGemini = async (prompt: string): Promise<string> => {
+    const requestData = {
+        contents: [{
+            parts: [{ text: prompt }]
+        }]
+    };
+
     try {
         logger.info("Generando respuesta con Gemini para el prompt");
 
-        // Verifica si el GEMINI_API_KEY está presente
-        if (!GEMINI_API_KEY) {
-            throw new Error("API key no configurada en el archivo .env");
+        const response = await fetch(GEMINI_URL_API_KEY, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(requestData),
+        });
+
+        if (!response.ok) {
+            logger.error(`Error en la API de Gemini: ${response.statusText}`);
+            return "Error al generar respuesta.";
         }
 
-        const response = await axios.post(
-            GEMINI_URL, // URL del endpoint de Gemini
-            {
-                prompt: prompt, // El contenido del prompt que estás pasando
-                temperature: 0.7, // Control de la creatividad de la respuesta (opcional)
-                max_output_tokens: 200, // Control del número máximo de tokens en la respuesta (opcional)
-                model: GEMINI_MODEL // El modelo específico de Gemini que deseas usar
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${GEMINI_API_KEY}`, // Autenticación de la API
-                    'Content-Type': 'application/json' // Tipo de contenido JSON
-                }
-            }
-        );
+        const data = await response.json();
 
-        if (response.data && response.data.text) {
-            return response.data.text.trim(); // Devuelve el texto de la respuesta generada
+        if (data && data.candidates && data.candidates.length > 0) {
+            console.log("datagemini", data)
+            return data.candidates[0].output;
         } else {
             logger.error("Respuesta vacía de Gemini");
             return "Error: respuesta vacía";
         }
     } catch (e) {
-        logger.error("Error al generar respuesta con Gemini: %s", e);
+        logger.error(`Error al generar respuesta con Gemini: ${e}`);
         return "Error al generar respuesta.";
     }
+};
+
+interface ChatMessage {
+    from: string;
+    to?: string;
+    timestamp?: string;
+    type?: string;
+    text?: { body?: string };
 }
 
 
-async function saveChatDetails(chatMessages: any[], chatGroupId: string, clienteNumero: string, vendedorNumero: string): Promise<boolean> {
-    try {
-        const chatDetails = chatMessages.map((message, index) => ({
-            chat_group: chatGroupId,
-            sequence: index + 1,
-            from: message.from,
-            to: message.to || (message.from === clienteNumero ? vendedorNumero : clienteNumero),
-            timestamp: message.timestamp || DateTime.utc().toISO(),
-            type: message.type || "text",
-            body: message.text?.body || ""
-        }));
 
-        if (chatDetails.length > 0) {
+const saveChatDetails = async (
+    chatMessages: ChatMessage[],
+    chatGroupId: string,
+    clienteNumero: string,
+    vendedorNumero: string
+): Promise<boolean> => {
+    try {
+        const chatDetails = chatMessages.map((message, index) => {
+            return {
+                chat_group: chatGroupId,
+                sequence: index + 1,
+                from: message.from,
+                to: message.to || (message.from === clienteNumero ? vendedorNumero : clienteNumero),
+                timestamp: message.timestamp || DateTime.utc().toISO(),
+                type: message.type || "text",
+                body: message.text?.body || "",
+            };
+        });
+
+        if (chatDetails.length) {
             await chatDetailsCollection.insertMany(chatDetails);
             logger.info(`Detalles del chat guardados exitosamente para el grupo ${chatGroupId}`);
             return true;
         }
+        return false;
     } catch (e) {
         logger.error(`Error al guardar detalles del chat: ${e}`);
         return false;
     }
-    return false;
-}
+};
 
-function processBooleanResponse(response: string): boolean {
+const processBooleanResponse = (response: unknown): boolean => {
+    if (typeof response !== "string") {
+        return false; // O define un valor por defecto según tus necesidades
+    }
     response = response.toLowerCase().trim();
-    return response.includes('sí') || response.includes('si');
-}
+    return response.includes("sí") || response.includes("si");
+};
 
-function processSentimentResponse(response: string): string {
+
+const processSentimentResponse = (response: unknown): string => {
+    if (typeof response !== "string") {
+        return "neutral"; // Valor predeterminado
+    }
     response = response.toLowerCase().trim();
-    const validSentiments = ['positivo', 'negativo', 'neutral'];
-    return validSentiments.includes(response) ? response : 'neutral';
-}
+    const validSentiments = ["positivo", "negativo", "neutral"];
+    return validSentiments.includes(response) ? response : "neutral";
+};
 
-function filterMessages(chatMessages: any[], isVendedor: boolean = false): string {
-    const filteredMessages = chatMessages
-        .filter(message => (isVendedor ? message.from === "vendedor_numero" : message.from !== "vendedor_numero"))
-        .map(message => message.text?.body || "")
-        .filter(text => text);
 
-    return filteredMessages.join(" ");
-}
+const filterMessages = (chatMessages: ChatMessage[], isVendedor = false): string => {
+    return chatMessages
+        .filter((message) => {
+            const isFromVendedor = message.from === "vendedor_numero";
+            return isVendedor === isFromVendedor && typeof message.text?.body === "string";
+        })
+        .map((message) => message.text!.body) // ¡Aquí se garantiza que body es un string!
+        .join(" ");
+};
 
-function createAnalysisPrompts(vendedorText: string, clienteText: string) {
+
+function createAnalysisPrompts(vendedorText: string, clienteText: string): Record<string, string> {
+    if (!vendedorText || !clienteText) {
+        throw new Error("Los textos de 'vendedorText' y 'clienteText' no pueden estar vacíos.");
+    }
+
     return {
         greetings: `
-        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
-        si el VENDEDOR usó saludos como "hola", "buenos días", etc.:
-        ${vendedorText}
-        `,
-        
+Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR. Responde con 'sí' o 'no' 
+si el VENDEDOR usó saludos como "hola", "buenos días", "buenas tardes", etc.:
+${vendedorText}
+`,
+
         goodbyes: `
-        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
-        si el VENDEDOR usó despedidas como "adiós", "hasta luego", etc.:
-        ${vendedorText}
-        `,
-        
+Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR. Responde con 'sí' o 'no' 
+si el VENDEDOR usó despedidas como "adiós", "hasta luego", "buenas noches", etc.:
+${vendedorText}
+`,
+
         sentiment: `
-        Analiza el siguiente texto que contiene SOLO mensajes del CLIENTE en una conversación con un vendedor.
-        Proporciona un análisis breve enfocado en:
-        1. La actitud del cliente
-        2. Su nivel de satisfacción
-        3. Su disposición en la conversación
+Analiza el siguiente texto que contiene SOLO mensajes del CLIENTE en una conversación con un vendedor.
+Proporciona un análisis breve enfocado en:
+1. La actitud del cliente.
+2. Su nivel de satisfacción.
+3. Su disposición en la conversación.
 
-        Se breve y directo.
+Texto a analizar:
+${clienteText}
+`,
 
-        Texto a analizar:
-        ${clienteText}
-        `,
-        
-        sentiment_tag: `
-        Para el siguiente texto que contiene SOLO mensajes del CLIENTE, responde SOLO con una de estas palabras 
-        basándote en la actitud del cliente: 'positivo', 'negativo', 'neutral':
-        ${clienteText}
-        `
+        sentimentTag: `
+Para el siguiente texto que contiene SOLO mensajes del CLIENTE, responde SOLO con una de estas palabras 
+según la actitud del cliente: 'positivo', 'negativo', 'neutral'.
+Texto a analizar:
+${clienteText}
+`
     };
 }
+
+
 
 app.post("/analyze", async (req: Request, res: Response) => {
     try {
@@ -183,24 +218,24 @@ app.post("/analyze", async (req: Request, res: Response) => {
         const countryClientPhoneNumber = data.country_client_phone_number || "No especificado";
         const clienteNumero = data.cliente_numero || "No especificado";
         const vendedorNumero = data.vendedor_numero || "No especificado";
-        
+
         // Guardar detalles del chat
         const chatDetailsSaved = await saveChatDetails(
-            data.chat, 
-            chatGroupId, 
-            clienteNumero, 
+            data.chat,
+            chatGroupId,
+            clienteNumero,
             vendedorNumero
         );
-        
+
         if (!chatDetailsSaved) {
             return res.status(500).json({ error: "Error saving chat details" });
         }
-        
+
         // Filtrar mensajes por tipo usando el nuevo formato
         const chatMessages = data.chat;
         const vendedorText = filterMessages(chatMessages, true);
         const clienteText = filterMessages(chatMessages, false);
-        
+
         if (!vendedorText.trim()) {
             logger.warning("No se encontraron mensajes del vendedor");
             return res.status(400).json({ error: "No vendor messages found" });
@@ -265,23 +300,23 @@ app.get("/chats", async (req: Request, res: Response) => {
         // Obtener parámetros de paginación
         const page = parseInt(req.query.page as string) || 1;
         const perPage = parseInt(req.query.per_page as string) || 10;
-        
+
         // Calcular el skip
         const skip = (page - 1) * perPage;
-        
+
         // Obtener total de documentos
         const total = await chatsCollection.countDocuments({});
-        
+
         const chats = await chatsCollection.find({})
             .sort({ '_id': -1 })
             .skip(skip)
             .limit(perPage)
             .toArray();
-        
+
         chats.forEach(chat => {
             chat['_id'] = chat['_id'].toString();
         });
-        
+
         return res.json({
             total,
             page,
@@ -289,7 +324,7 @@ app.get("/chats", async (req: Request, res: Response) => {
             total_pages: Math.ceil(total / perPage),
             chats
         });
-        
+
     } catch (e) {
         logger.error(`Error al obtener chats: ${e}`);
         return res.status(500).json({ error: "Error al obtener chats" });
@@ -303,12 +338,12 @@ app.get("/chat_details/:chat_group", async (req: Request, res: Response) => {
             { chat_group: chatGroup },
             { projection: { _id: 0 } }
         ).sort({ sequence: 1 }).toArray();
-        
+
         if (details.length > 0) {
             return res.json({ chat_detail: details });
         }
         return res.status(404).json({ error: "Chat details no encontrados" });
-        
+
     } catch (e) {
         logger.error(`Error al obtener detalles del chat ${req.params.chat_group}: ${e}`);
         return res.status(500).json({ error: "Error al obtener detalles del chat" });
@@ -324,7 +359,7 @@ app.get("/chats_by_group/:chat_group", async (req: Request, res: Response) => {
             return res.json(chat);
         }
         return res.status(404).json({ error: "Chat no encontrado" });
-        
+
     } catch (e) {
         logger.error(`Error al obtener chat ${req.params.chat_group}: ${e}`);
         return res.status(500).json({ error: "Error al obtener chat" });
@@ -339,7 +374,7 @@ app.get("/health", async (req: Request, res: Response) => {
         if (!GEMINI_API_KEY) {
             throw new Error("GEMINI_API_KEY no está configurada");
         }
-        
+
         return res.json({
             status: "healthy",
             mongodb: "connected",
@@ -382,7 +417,7 @@ app.get("/export/chats", async (req: Request, res: Response) => {
         });
 
         const csvStream = new Readable();
-        csvStream._read = () => {};
+        csvStream._read = () => { };
         csvStream.push(headers.join(',') + '\n');
         data.forEach(row => csvStream.push(row.join(',') + '\n'));
         csvStream.push(null);
@@ -390,7 +425,7 @@ app.get("/export/chats", async (req: Request, res: Response) => {
         res.setHeader("Content-Disposition", `attachment; filename=chats_export_${DateTime.now().toFormat('yyyyMMdd_HHmmss')}.csv`);
         res.setHeader("Content-type", "text/csv");
         csvStream.pipe(res);
-        
+
     } catch (e) {
         logger.error(`Error al exportar chats: ${e}`);
         return res.status(500).json({ error: "Error al exportar chats" });
@@ -421,7 +456,7 @@ app.get("/export/chat_details", async (req: Request, res: Response) => {
         ]);
 
         const csvStream = new Readable();
-        csvStream._read = () => {};
+        csvStream._read = () => { };
         csvStream.push(headers.join(',') + '\n');
         data.forEach(row => csvStream.push(row.join(',') + '\n'));
         csvStream.push(null);
@@ -429,7 +464,7 @@ app.get("/export/chat_details", async (req: Request, res: Response) => {
         res.setHeader("Content-Disposition", `attachment; filename=chat_details_export_${DateTime.now().toFormat('yyyyMMdd_HHmmss')}.csv`);
         res.setHeader("Content-type", "text/csv");
         csvStream.pipe(res);
-        
+
     } catch (e) {
         logger.error(`Error al exportar detalles de chat: ${e}`);
         return res.status(500).json({ error: "Error al exportar detalles de chat" });

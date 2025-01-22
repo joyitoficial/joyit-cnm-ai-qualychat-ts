@@ -59,18 +59,6 @@ var logger = createLogger({
 var app = express();
 app.use(cors());
 app.use(express.json());
-// Logger configuration
-var logger = createLogger({
-    level: 'info',
-    format: format.combine(format.timestamp(), format.printf(function (_a) {
-        var timestamp = _a.timestamp, level = _a.level, message = _a.message;
-        return "".concat(timestamp, " - ").concat(level.toUpperCase(), " - ").concat(message);
-    })),
-    transports: [new transports.Console()]
-});
-var app = express();
-app.use(cors());
-app.use(express.json());
 // MongoDB configuration
 var MONGO_URI = "mongodb+srv://cordovacruzfloresmeralda:SMhBfmnbphn8M7EW@cluster0.v1vxy.mongodb.net/";
 var MONGO_DB_NAME = process.env.MONGO_DB_NAME || "qualichat";
@@ -105,108 +93,123 @@ var chatDetailsCollection;
 var GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 var GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp"; // Default to gemini-2.0-flash-exp
 var GEMINI_URL = process.env.GEMINI_URL || "https://generativelanguage.googleapis.com/v1beta2/models/gemini-pro:generateText";
-// Axios function to call Gemini API
-function generateResponseFromGemini(prompt) {
-    return __awaiter(this, void 0, void 0, function () {
-        var response, e_2;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
-                case 0:
-                    _a.trys.push([0, 2, , 3]);
-                    logger.info("Generando respuesta con Gemini para el prompt");
-                    // Verifica si el GEMINI_API_KEY está presente
-                    if (!GEMINI_API_KEY) {
-                        throw new Error("API key no configurada en el archivo .env");
-                    }
-                    return [4 /*yield*/, axios.post(GEMINI_URL, // URL del endpoint de Gemini
-                        {
-                            prompt: prompt, // El contenido del prompt que estás pasando
-                            temperature: 0.7, // Control de la creatividad de la respuesta (opcional)
-                            max_output_tokens: 200, // Control del número máximo de tokens en la respuesta (opcional)
-                            model: GEMINI_MODEL // El modelo específico de Gemini que deseas usar
-                        }, {
-                            headers: {
-                                'Authorization': "Bearer ".concat(GEMINI_API_KEY), // Autenticación de la API
-                                'Content-Type': 'application/json' // Tipo de contenido JSON
-                            }
-                        })];
-                case 1:
-                    response = _a.sent();
-                    if (response.data && response.data.text) {
-                        return [2 /*return*/, response.data.text.trim()]; // Devuelve el texto de la respuesta generada
-                    }
-                    else {
-                        logger.error("Respuesta vacía de Gemini");
-                        return [2 /*return*/, "Error: respuesta vacía"];
-                    }
-                    return [3 /*break*/, 3];
-                case 2:
-                    e_2 = _a.sent();
-                    logger.error("Error al generar respuesta con Gemini: %s", e_2);
+var GEMINI_URL_API_KEY = "".concat(GEMINI_URL, "=").concat(GEMINI_API_KEY);
+console.log("GEMINI_API_KEY", GEMINI_URL_API_KEY);
+var generateResponseFromGemini = function (prompt) { return __awaiter(_this, void 0, void 0, function () {
+    var requestData, response, data, e_2;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                requestData = {
+                    contents: [{
+                            parts: [{ text: prompt }]
+                        }]
+                };
+                _a.label = 1;
+            case 1:
+                _a.trys.push([1, 4, , 5]);
+                logger.info("Generando respuesta con Gemini para el prompt");
+                return [4 /*yield*/, fetch(GEMINI_URL_API_KEY, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify(requestData),
+                    })];
+            case 2:
+                response = _a.sent();
+                if (!response.ok) {
+                    logger.error("Error en la API de Gemini: ".concat(response.statusText));
                     return [2 /*return*/, "Error al generar respuesta."];
-                case 3: return [2 /*return*/];
-            }
-        });
+                }
+                return [4 /*yield*/, response.json()];
+            case 3:
+                data = _a.sent();
+                if (data && data.candidates && data.candidates.length > 0) {
+                    console.log("datagemini", data);
+                    return [2 /*return*/, data.candidates[0].output];
+                }
+                else {
+                    logger.error("Respuesta vacía de Gemini");
+                    return [2 /*return*/, "Error: respuesta vacía"];
+                }
+                return [3 /*break*/, 5];
+            case 4:
+                e_2 = _a.sent();
+                logger.error("Error al generar respuesta con Gemini: ".concat(e_2));
+                return [2 /*return*/, "Error al generar respuesta."];
+            case 5: return [2 /*return*/];
+        }
     });
-}
-function saveChatDetails(chatMessages, chatGroupId, clienteNumero, vendedorNumero) {
-    return __awaiter(this, void 0, void 0, function () {
-        var chatDetails, e_3;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
-                case 0:
-                    _a.trys.push([0, 3, , 4]);
-                    chatDetails = chatMessages.map(function (message, index) {
-                        var _a;
-                        return ({
-                            chat_group: chatGroupId,
-                            sequence: index + 1,
-                            from: message.from,
-                            to: message.to || (message.from === clienteNumero ? vendedorNumero : clienteNumero),
-                            timestamp: message.timestamp || DateTime.utc().toISO(),
-                            type: message.type || "text",
-                            body: ((_a = message.text) === null || _a === void 0 ? void 0 : _a.body) || ""
-                        });
-                    });
-                    if (!(chatDetails.length > 0)) return [3 /*break*/, 2];
-                    return [4 /*yield*/, chatDetailsCollection.insertMany(chatDetails)];
-                case 1:
-                    _a.sent();
-                    logger.info("Detalles del chat guardados exitosamente para el grupo ".concat(chatGroupId));
-                    return [2 /*return*/, true];
-                case 2: return [3 /*break*/, 4];
-                case 3:
-                    e_3 = _a.sent();
-                    logger.error("Error al guardar detalles del chat: ".concat(e_3));
-                    return [2 /*return*/, false];
-                case 4: return [2 /*return*/, false];
-            }
-        });
+}); };
+var saveChatDetails = function (chatMessages, chatGroupId, clienteNumero, vendedorNumero) { return __awaiter(_this, void 0, void 0, function () {
+    var chatDetails, e_3;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                _a.trys.push([0, 3, , 4]);
+                chatDetails = chatMessages.map(function (message, index) {
+                    var _a;
+                    return {
+                        chat_group: chatGroupId,
+                        sequence: index + 1,
+                        from: message.from,
+                        to: message.to || (message.from === clienteNumero ? vendedorNumero : clienteNumero),
+                        timestamp: message.timestamp || DateTime.utc().toISO(),
+                        type: message.type || "text",
+                        body: ((_a = message.text) === null || _a === void 0 ? void 0 : _a.body) || "",
+                    };
+                });
+                if (!chatDetails.length) return [3 /*break*/, 2];
+                return [4 /*yield*/, chatDetailsCollection.insertMany(chatDetails)];
+            case 1:
+                _a.sent();
+                logger.info("Detalles del chat guardados exitosamente para el grupo ".concat(chatGroupId));
+                return [2 /*return*/, true];
+            case 2: return [2 /*return*/, false];
+            case 3:
+                e_3 = _a.sent();
+                logger.error("Error al guardar detalles del chat: ".concat(e_3));
+                return [2 /*return*/, false];
+            case 4: return [2 /*return*/];
+        }
     });
-}
-function processBooleanResponse(response) {
+}); };
+var processBooleanResponse = function (response) {
+    if (typeof response !== "string") {
+        return false; // O define un valor por defecto según tus necesidades
+    }
     response = response.toLowerCase().trim();
-    return response.includes('sí') || response.includes('si');
-}
-function processSentimentResponse(response) {
+    return response.includes("sí") || response.includes("si");
+};
+var processSentimentResponse = function (response) {
+    if (typeof response !== "string") {
+        return "neutral"; // Valor predeterminado
+    }
     response = response.toLowerCase().trim();
-    var validSentiments = ['positivo', 'negativo', 'neutral'];
-    return validSentiments.includes(response) ? response : 'neutral';
-}
-function filterMessages(chatMessages, isVendedor) {
+    var validSentiments = ["positivo", "negativo", "neutral"];
+    return validSentiments.includes(response) ? response : "neutral";
+};
+var filterMessages = function (chatMessages, isVendedor) {
     if (isVendedor === void 0) { isVendedor = false; }
-    var filteredMessages = chatMessages
-        .filter(function (message) { return (isVendedor ? message.from === "vendedor_numero" : message.from !== "vendedor_numero"); })
-        .map(function (message) { var _a; return ((_a = message.text) === null || _a === void 0 ? void 0 : _a.body) || ""; })
-        .filter(function (text) { return text; });
-    return filteredMessages.join(" ");
-}
+    return chatMessages
+        .filter(function (message) {
+        var _a;
+        var isFromVendedor = message.from === "vendedor_numero";
+        return isVendedor === isFromVendedor && typeof ((_a = message.text) === null || _a === void 0 ? void 0 : _a.body) === "string";
+    })
+        .map(function (message) { return message.text.body; }) // ¡Aquí se garantiza que body es un string!
+        .join(" ");
+};
 function createAnalysisPrompts(vendedorText, clienteText) {
+    if (!vendedorText || !clienteText) {
+        throw new Error("Los textos de 'vendedorText' y 'clienteText' no pueden estar vacíos.");
+    }
     return {
-        greetings: "\n        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 's\u00ED' o 'no' \n        si el VENDEDOR us\u00F3 saludos como \"hola\", \"buenos d\u00EDas\", etc.:\n        ".concat(vendedorText, "\n        "),
-        goodbyes: "\n        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 's\u00ED' o 'no' \n        si el VENDEDOR us\u00F3 despedidas como \"adi\u00F3s\", \"hasta luego\", etc.:\n        ".concat(vendedorText, "\n        "),
-        sentiment: "\n        Analiza el siguiente texto que contiene SOLO mensajes del CLIENTE en una conversaci\u00F3n con un vendedor.\n        Proporciona un an\u00E1lisis breve enfocado en:\n        1. La actitud del cliente\n        2. Su nivel de satisfacci\u00F3n\n        3. Su disposici\u00F3n en la conversaci\u00F3n\n\n        Se breve y directo.\n\n        Texto a analizar:\n        ".concat(clienteText, "\n        "),
-        sentiment_tag: "\n        Para el siguiente texto que contiene SOLO mensajes del CLIENTE, responde SOLO con una de estas palabras \n        bas\u00E1ndote en la actitud del cliente: 'positivo', 'negativo', 'neutral':\n        ".concat(clienteText, "\n        ")
+        greetings: "\nAnaliza el siguiente texto que contiene SOLO mensajes del VENDEDOR. Responde con 's\u00ED' o 'no' \nsi el VENDEDOR us\u00F3 saludos como \"hola\", \"buenos d\u00EDas\", \"buenas tardes\", etc.:\n".concat(vendedorText, "\n"),
+        goodbyes: "\nAnaliza el siguiente texto que contiene SOLO mensajes del VENDEDOR. Responde con 's\u00ED' o 'no' \nsi el VENDEDOR us\u00F3 despedidas como \"adi\u00F3s\", \"hasta luego\", \"buenas noches\", etc.:\n".concat(vendedorText, "\n"),
+        sentiment: "\nAnaliza el siguiente texto que contiene SOLO mensajes del CLIENTE en una conversaci\u00F3n con un vendedor.\nProporciona un an\u00E1lisis breve enfocado en:\n1. La actitud del cliente.\n2. Su nivel de satisfacci\u00F3n.\n3. Su disposici\u00F3n en la conversaci\u00F3n.\n\nTexto a analizar:\n".concat(clienteText, "\n"),
+        sentimentTag: "\nPara el siguiente texto que contiene SOLO mensajes del CLIENTE, responde SOLO con una de estas palabras \nseg\u00FAn la actitud del cliente: 'positivo', 'negativo', 'neutral'.\nTexto a analizar:\n".concat(clienteText, "\n")
     };
 }
 app.post("/analyze", function (req, res) { return __awaiter(_this, void 0, void 0, function () {
