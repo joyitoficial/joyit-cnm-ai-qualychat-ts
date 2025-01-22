@@ -40,7 +40,7 @@ GEMINI_API_KEY=<tu_api_key_de_gemini>
 Inicia el servidor con:
 
 ```bash
-npm start
+node dist/ts.js
 ```
 El servidor debería estar corriendo en http://localhost:5000.
 
