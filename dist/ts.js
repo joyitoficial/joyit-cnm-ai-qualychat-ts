@@ -35,31 +35,48 @@ app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 // Configuración de MongoDB
 const MONGO_URI = "mongodb+srv://cordovacruzfloresmeralda:SMhBfmnbphn8M7EW@cluster0.v1vxy.mongodb.net/";
-const MONGO_DB_NAME = process.env.MONGO_DB_NAME || "qualichat";
+const MONGO_DB_NAME = "qualichat"; // Nombre de la base de datos
+// Configuración de la API de Gemini desde .env
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY no está definida en las variables de entorno.");
+}
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp"; // Valor por defecto
+const genAI = new generative_ai_1.GoogleGenerativeAI(GEMINI_API_KEY);
 // Conexión a MongoDB
 let client;
+let db;
 let chatsCollection;
 let chatDetailsCollection;
 (() => __awaiter(void 0, void 0, void 0, function* () {
     try {
         client = new mongodb_1.MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
-        yield client.connect();
-        const db = client.db(MONGO_DB_NAME);
-        chatsCollection = db.collection('chats');
-        chatDetailsCollection = db.collection('chat_details');
+        yield client.connect(); // Conectar al servidor de MongoDB
+        db = client.db(MONGO_DB_NAME); // Seleccionar la base de datos
+        chatsCollection = db.collection('chats'); // Seleccionar la colección de resúmenes
+        chatDetailsCollection = db.collection('chat_details'); // Seleccionar la colección de detalles
         logger.info("Conexión a MongoDB exitosa.");
     }
     catch (e) {
         logger.error(`Error al conectar a MongoDB: ${e}`);
-        throw e;
+        throw e; // Relanzar la excepción para manejo externo
     }
 }))();
-// Gemini API configuration from .env
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp"; // Default to gemini-2.0-flash-exp
-const GEMINI_URL = process.env.GEMINI_URL || "https://generativelanguage.googleapis.com/v1beta2/models/gemini-pro:generateText";
-const GEMINI_URL_API_KEY = `${GEMINI_URL}=${GEMINI_API_KEY}`;
-const genAI = new generative_ai_1.GoogleGenerativeAI(GEMINI_API_KEY);
+// Función para guardar un resumen de chat
+function saveChatSummary(chatSummary) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const result = yield chatsCollection.insertOne(chatSummary); // Insertar el documento
+            logger.info(`Resumen de chat guardado con ID: ${result.insertedId}`);
+            return result.insertedId.toString(); // Retornar el ID del documento insertado
+        }
+        catch (e) {
+            logger.error(`Error al guardar el resumen de chat: ${e}`);
+            throw e; // Relanzar la excepción para manejo externo
+        }
+    });
+}
+// Función para generar respuestas con Gemini
 const generateResponseFromGemini = (prompt) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         logger.info("Generando respuesta con Gemini para el prompt");
@@ -80,6 +97,7 @@ const generateResponseFromGemini = (prompt) => __awaiter(void 0, void 0, void 0,
         return "Error al generar respuesta.";
     }
 });
+// Función para guardar detalles del chat
 const saveChatDetails = (chatMessages, chatGroupId, clienteNumero, vendedorNumero) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const chatDetails = chatMessages.map((message, index) => {
@@ -95,7 +113,7 @@ const saveChatDetails = (chatMessages, chatGroupId, clienteNumero, vendedorNumer
             };
         });
         if (chatDetails.length) {
-            yield chatDetailsCollection.insertMany(chatDetails);
+            yield chatDetailsCollection.insertMany(chatDetails); // Insertar los detalles del chat
             logger.info(`Detalles del chat guardados exitosamente para el grupo ${chatGroupId}`);
             return true;
         }
@@ -126,6 +144,17 @@ const filterMessages = (chatMessages, isVendedor = false) => {
         .join(" ");
 };
 const createAnalysisPrompts = (vendedorText, clienteText) => {
+    const problemResolutionPrompt = `
+        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
+        si el VENDEDOR resolvió el problema del cliente de manera efectiva. Considera lo siguiente:
+        1. ¿El vendedor proporcionó una solución clara y específica?
+        2. ¿El cliente mostró satisfacción con la solución?
+        3. ¿El vendedor siguió un proceso lógico para resolver el problema?
+
+        Texto a analizar:
+        ${vendedorText}
+    `;
+    console.log("Prompt problemResolution generado:", problemResolutionPrompt); // Verifica el prompt
     return {
         greetings: `
         Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
@@ -154,47 +183,72 @@ const createAnalysisPrompts = (vendedorText, clienteText) => {
         basándote en la actitud del cliente: 'positivo', 'negativo', 'neutral':
         ${clienteText}
         `,
+        problemResolution: problemResolutionPrompt, // Usar la constante
     };
 };
-// Endpoint POST /analyze
 app.post("/analyze", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         logger.info("Iniciando análisis de chat.");
         const data = req.body;
+        // Validar que el campo 'chat' esté presente
         if (!data || !data.chat) {
             logger.warning("Solicitud inválida, 'chat' es un campo requerido.");
             return res.status(400).json({ error: "Invalid input, 'chat' field is required." });
         }
+        // Generar un ID único para el grupo de chat
         const chatGroupId = (0, uuid_1.v4)();
+        // Extraer datos del cliente y vendedor
         const countryClientPhoneNumber = data.country_client_phone_number || "No especificado";
         const clienteNumero = data.cliente_numero || "No especificado";
         const vendedorNumero = data.vendedor_numero || "No especificado";
         // Guardar detalles del chat
         const chatDetailsSaved = yield saveChatDetails(data.chat, chatGroupId, clienteNumero, vendedorNumero);
         if (!chatDetailsSaved) {
+            logger.error("Error al guardar los detalles del chat.");
             return res.status(500).json({ error: "Error saving chat details" });
         }
-        // Filtrar mensajes por tipo usando el nuevo formato
+        // Filtrar mensajes por tipo (vendedor o cliente)
         const chatMessages = data.chat;
-        const vendedorText = filterMessages(chatMessages, true);
-        const clienteText = filterMessages(chatMessages, false);
+        const vendedorText = filterMessages(chatMessages, true); // Mensajes del vendedor
+        const clienteText = filterMessages(chatMessages, false); // Mensajes del cliente
+        // Validar que haya mensajes del vendedor y del cliente
         if (!vendedorText.trim()) {
-            logger.warning("No se encontraron mensajes del vendedor");
+            logger.warning("No se encontraron mensajes del vendedor.");
             return res.status(400).json({ error: "No vendor messages found" });
         }
         if (!clienteText.trim()) {
-            logger.warning("No se encontraron mensajes del cliente");
+            logger.warning("No se encontraron mensajes del cliente.");
             return res.status(400).json({ error: "No client messages found" });
         }
+        // Crear prompts para el análisis
         const prompts = createAnalysisPrompts(vendedorText, clienteText);
+        // Generar respuestas para todos los prompts usando Gemini
         const greetingsResponse = yield generateResponseFromGemini(prompts.greetings);
         const goodbyeResponse = yield generateResponseFromGemini(prompts.goodbyes);
         const sentimentResponse = yield generateResponseFromGemini(prompts.sentiment);
         const sentimentTagResponse = yield generateResponseFromGemini(prompts.sentimentTag);
+        const problemResolutionResponse = yield generateResponseFromGemini(prompts.problemResolution);
+        // Verificar la respuesta de problemResolution
+        logger.info("Respuesta de problemResolution:", problemResolutionResponse);
+        // Procesar las respuestas
         const greetingsRulePass = processBooleanResponse(greetingsResponse);
         const goodbyeRulePass = processBooleanResponse(goodbyeResponse);
         const sentimentalTag = processSentimentResponse(sentimentTagResponse);
-        // Crear y guardar el resumen del chat
+        // Convertir respuestas de texto a "sí" o "no"
+        const formatTextResponse = (response) => {
+            const lowerResponse = response.toLowerCase();
+            return lowerResponse.includes("yes") || lowerResponse.includes("sí") ? "sí" : "no";
+        };
+        const greetingsText = formatTextResponse(greetingsResponse);
+        const goodbyeText = formatTextResponse(goodbyeResponse);
+        const problemResolutionText = formatTextResponse(problemResolutionResponse);
+        // Crear los nuevos campos con respuestas variadas
+        const greetingsGoodbyeProblemResolutionText = formatTextResponse(greetingsResponse); // Basado en greetings
+        const sentimentalProblemResolutionText = formatTextResponse(sentimentResponse); // Basado en sentiment
+        // Crear los nuevos campos booleanos basados en las respuestas de texto
+        const greetingsGoodbyeProblemResolutionBool = greetingsGoodbyeProblemResolutionText === "sí"; // Booleano
+        const sentimentalProblemResolutionBool = sentimentalProblemResolutionText === "sí"; // Booleano
+        // Crear el resumen del chat
         const chatSummary = {
             chat: {
                 chat_group: chatGroupId,
@@ -205,12 +259,16 @@ app.post("/analyze", (req, res) => __awaiter(void 0, void 0, void 0, function* (
                 goodbye_rule_pass: goodbyeRulePass,
                 sentimental_analysis: sentimentResponse,
                 sentimental_tags: sentimentalTag,
+                greetings_goodbye_problem_resolution: greetingsGoodbyeProblemResolutionBool, // Booleano (true/false)
+                sentimental_problem_resolution: sentimentalProblemResolutionBool, // Booleano (true/false)
                 rules: "greetings",
                 raw_responses: {
-                    greetings: greetingsResponse,
-                    goodbyes: goodbyeResponse,
+                    greetings: greetingsText, // Texto ("sí" o "no")
+                    goodbyes: goodbyeText, // Texto ("sí" o "no")
                     sentiment: sentimentResponse,
                     sentiment_tag: sentimentTagResponse,
+                    greetings_goodbye_problem_resolution: greetingsGoodbyeProblemResolutionText, // Texto ("sí" o "no")
+                    sentimental_problem_resolution: sentimentalProblemResolutionText, // Texto ("sí" o "no")
                 },
             },
         };
