@@ -5,6 +5,7 @@
     "csv-stringify": "^6.5.2",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "gpt-tokenizer": "^2.8.1",
     "luxon": "^3.5.0",
     "mongodb": "^6.12.0",
     "uuid": "^11.0.5",

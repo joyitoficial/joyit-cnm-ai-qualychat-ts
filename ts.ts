@@ -7,6 +7,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { createLogger, format, transports } from 'winston';
 import { DateTime } from 'luxon';
 import { Readable } from 'stream';
+import { encode } from 'gpt-tokenizer';
 
 // Configuración de variables de entorno
 dotenv.config();
@@ -27,7 +28,7 @@ app.use(express.json());
 
 // Configuración de MongoDB
 const MONGO_URI = "mongodb+srv://cordovacruzfloresmeralda:SMhBfmnbphn8M7EW@cluster0.v1vxy.mongodb.net/";
-const MONGO_DB_NAME = "qualichat"; // Nombre de la base de datos
+const MONGO_DB_NAME = "Qualychat"; // Nombre de la base de datos
 
 // Configuración de la API de Gemini desde .env
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -152,20 +153,26 @@ const filterMessages = (chatMessages: ChatMessage[], isVendedor = false): string
         .join(" ");
 };
 
+// Función para contar tokens
+const countTokens = (text: string): number => {
+    return encode(text).length;
+};
+const calculateDuration = (startTime: string, endTime: string): string => {
+    const start = new Date(startTime); // Convertir a objeto Date
+    const end = new Date(endTime); // Convertir a objeto Date
+
+    // Validar que las fechas sean válidas
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        throw new Error("Formato de fecha inválido.");
+    }
+
+    const differenceInMilliseconds = end.getTime() - start.getTime(); // Diferencia en milisegundos
+    return differenceInMilliseconds.toString(); // Devolver la duración en milisegundos como cadena
+};
+
+
+
 const createAnalysisPrompts = (vendedorText: string, clienteText: string): Record<string, string> => {
-    const problemResolutionPrompt = `
-        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
-        si el VENDEDOR resolvió el problema del cliente de manera efectiva. Considera lo siguiente:
-        1. ¿El vendedor proporcionó una solución clara y específica?
-        2. ¿El cliente mostró satisfacción con la solución?
-        3. ¿El vendedor siguió un proceso lógico para resolver el problema?
-
-        Texto a analizar:
-        ${vendedorText}
-    `;
-
-    console.log("Prompt problemResolution generado:", problemResolutionPrompt); // Verifica el prompt
-
     return {
         greetings: `
         Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
@@ -194,7 +201,16 @@ const createAnalysisPrompts = (vendedorText: string, clienteText: string): Recor
         basándote en la actitud del cliente: 'positivo', 'negativo', 'neutral':
         ${clienteText}
         `,
-        problemResolution: problemResolutionPrompt, // Usar la constante
+        problemResolution: `
+        Analiza el siguiente texto que contiene SOLO mensajes del VENDEDOR y responde SOLO con 'sí' o 'no' 
+        si el VENDEDOR resolvió el problema del cliente de manera efectiva. Considera lo siguiente:
+        1. ¿El vendedor proporcionó una solución clara y específica?
+        2. ¿El cliente mostró satisfacción con la solución?
+        3. ¿El vendedor siguió un proceso lógico para resolver el problema?
+
+        Texto a analizar:
+        ${vendedorText}
+        `,
     };
 };
 
@@ -209,20 +225,39 @@ app.post("/analyze", async (req: Request, res: Response) => {
             return res.status(400).json({ error: "Invalid input, 'chat' field is required." });
         }
 
-        // Generar un ID único para el grupo de chat
+        // Generar IDs únicos
         const chatGroupId = uuidv4();
+        const analysisChatGroupId = uuidv4();
 
         // Extraer datos del cliente y vendedor
-        const countryClientPhoneNumber = data.country_client_phone_number || "No especificado";
-        const clienteNumero = data.cliente_numero || "No especificado";
-        const vendedorNumero = data.vendedor_numero || "No especificado";
+        const {
+            country_client_phone_number = "No especificado",
+            cliente_numero = "No especificado",
+            vendedor_numero = "No especificado",
+            client_name = "No especificado",
+            assistance = "No especificado",
+            start_time = new Date().toISOString(),
+            end_time = new Date().toISOString(),
+        } = data;
 
+        // Calcular la duración en milisegundos
+        let durationInMilliseconds = "0";
+        try {
+            durationInMilliseconds = calculateDuration(start_time, end_time);
+            console.log(durationInMilliseconds); // "6001" (milisegundos)
+        } catch (e) {
+            logger.error(`Error al calcular la duración: ${e}`);
+            return res.status(400).json({ error: "Invalid date format", details: e.toString() });
+        }
+        // Convertir la duración a segundos (opcional)
+        const durationInSeconds = (parseInt(durationInMilliseconds) / 1000).toFixed(2);
+        
         // Guardar detalles del chat
         const chatDetailsSaved = await saveChatDetails(
             data.chat,
             chatGroupId,
-            clienteNumero,
-            vendedorNumero
+            cliente_numero,
+            vendedor_numero
         );
 
         if (!chatDetailsSaved) {
@@ -256,13 +291,18 @@ app.post("/analyze", async (req: Request, res: Response) => {
         const sentimentTagResponse = await generateResponseFromGemini(prompts.sentimentTag);
         const problemResolutionResponse = await generateResponseFromGemini(prompts.problemResolution);
 
-        // Verificar la respuesta de problemResolution
-        logger.info("Respuesta de problemResolution:", problemResolutionResponse);
+        // Contar tokens de entrada y salida
+        const inputTokens = countTokens(vendedorText + clienteText);
+        const outputTokens = countTokens(
+            greetingsResponse + goodbyeResponse + sentimentResponse + sentimentTagResponse + problemResolutionResponse
+        );
+        const totalTokens = inputTokens + outputTokens;
 
         // Procesar las respuestas
         const greetingsRulePass = processBooleanResponse(greetingsResponse);
         const goodbyeRulePass = processBooleanResponse(goodbyeResponse);
         const sentimentalTag = processSentimentResponse(sentimentTagResponse);
+        const problemResolved = processBooleanResponse(problemResolutionResponse);
 
         // Convertir respuestas de texto a "sí" o "no"
         const formatTextResponse = (response: string): string => {
@@ -274,48 +314,57 @@ app.post("/analyze", async (req: Request, res: Response) => {
         const goodbyeText = formatTextResponse(goodbyeResponse);
         const problemResolutionText = formatTextResponse(problemResolutionResponse);
 
-        // Crear los nuevos campos con respuestas variadas
-        const greetingsGoodbyeProblemResolutionText = formatTextResponse(greetingsResponse); // Basado en greetings
-        const sentimentalProblemResolutionText = formatTextResponse(sentimentResponse); // Basado en sentiment
-
-        // Crear los nuevos campos booleanos basados en las respuestas de texto
-        const greetingsGoodbyeProblemResolutionBool = greetingsGoodbyeProblemResolutionText === "sí"; // Booleano
-        const sentimentalProblemResolutionBool = sentimentalProblemResolutionText === "sí"; // Booleano
-
         // Crear el resumen del chat
         const chatSummary = {
             chat: {
                 chat_group: chatGroupId,
-                country_client_phone_number: countryClientPhoneNumber,
-                cliente_numero: clienteNumero,
-                vendedor_numero: vendedorNumero,
-                greetings_rule_pass: greetingsRulePass,
-                goodbye_rule_pass: goodbyeRulePass,
+                "analysis.chat_group": analysisChatGroupId,
+                client_name: client_name,
+                country_client_phone_number: country_client_phone_number,
+                cliente_numero: cliente_numero,
+                vendedor_numero: vendedor_numero,
+                assitance: assistance,
+                start_time: start_time,
+                end_time: end_time,
+                duration: durationInSeconds,
+                "analysis.greetings_rule_pass": greetingsRulePass,
+                "analysis.goodbye_rule_pass": goodbyeRulePass,
                 sentimental_analysis: sentimentResponse,
-                sentimental_tags: sentimentalTag,
-                greetings_goodbye_problem_resolution: greetingsGoodbyeProblemResolutionBool, // Booleano (true/false)
-                sentimental_problem_resolution: sentimentalProblemResolutionBool, // Booleano (true/false)
+                "analysis.sentimental_analysis": sentimentalTag,
+                "analysis.resolved_problem": problemResolved,
+                "analysis.total_tokens": {
+                    input_tokens: inputTokens,
+                    output_tokens: outputTokens,
+                    total_tokens: totalTokens,
+                },
+                created_at: new Date().toISOString(),
                 rules: "greetings",
                 raw_responses: {
-                    greetings: greetingsText, // Texto ("sí" o "no")
-                    goodbyes: goodbyeText, // Texto ("sí" o "no")
-                    sentiment: sentimentResponse,
-                    sentiment_tag: sentimentTagResponse,
-                    greetings_goodbye_problem_resolution: greetingsGoodbyeProblemResolutionText, // Texto ("sí" o "no")
-                    sentimental_problem_resolution: sentimentalProblemResolutionText, // Texto ("sí" o "no")
+                    "analysis.greetings_rule_pass": greetingsText,
+                    "analysis.goodbye_rule_pass": goodbyeText,
+                    greeting: "Hola, buenos días.",
+                    client_query: "Quisiera saber el estado de mi pedido con el número 123456.",
+                    assistance_response: "Claro, déjame verificar el estado de tu pedido.",
+                    status_update: "Tu pedido está en camino y llegará en 2 días.",
+                    client_acknowledgment: "Gracias por la información.",
+                    goodbye: "Que tengas un buen día.",
                 },
+                _id: uuidv4(), // ID único para el chat
             },
+            _id: uuidv4(), // ID único para el documento
         };
+
+        // Guardar el resumen del chat en MongoDB
         try {
             const result = await chatsCollection.insertOne(chatSummary);
-            chatSummary.chat["_id"] = result.insertedId.toString();
+            chatSummary.chat["_id"] = result.insertedId.toString(); // Agregar el ID generado
         } catch (e) {
             logger.error(`Error al guardar en MongoDB: ${e}`);
             return res.status(500).json({ error: "Database error", details: e.toString() });
         }
 
         logger.info(`Análisis exitoso para el grupo de chat ${chatGroupId}`);
-        return res.json(chatSummary);
+        return res.json(chatSummary); // Devolver el resumen del chat
     } catch (e) {
         logger.error(`Error al analizar el chat: ${e}`);
         return res.status(500).json({ error: "Internal server error", details: e.toString() });
