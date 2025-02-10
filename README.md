@@ -1,7 +1,7 @@
 # Joyit CNM AI QualyChat TS
 
 
-## 3. Configuración
+## 1. Configuración
 Crea un archivo `.env` en la raíz del proyecto y configura las siguientes variables:
 
 ```bash
@@ -21,9 +21,15 @@ GEMINI_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-fl
 # Configuración de OPENAI_API_KEY
 OPENAI_API_KEY=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
 ```
-## 4. Ejecutar el proyecto
+## 2. Ejecutar el proyecto
 Inicia el servidor con:
 
 ```bash
 node dist/ts.js
+```
+## 3. Ejecutar connectBI
+
+```bash
+venv\Scripts\activate
+uvicorn main:app --reload
 ```
