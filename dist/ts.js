@@ -35,7 +35,7 @@ const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 // Configuración de MongoDB
-const MONGO_URI = "mongodb+srv://cordovacruzfloresmeralda:SMhBfmnbphn8M7EW@cluster0.v1vxy.mongodb.net/";
+const MONGO_URI = "mongodb+srv://cordovacruzfloresmeralda:BHCdmAZGTDFcV04l@cluster0.v1vxy.mongodb.net/";
 const MONGO_DB_NAME = "Qualychat"; // Nombre de la base de datos
 // Configuración de la API de Gemini desde .env
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -203,39 +203,30 @@ app.post("/analyze", (req, res) => __awaiter(void 0, void 0, void 0, function* (
     try {
         logger.info("Iniciando análisis de chat.");
         const data = req.body;
-        // Validar que el campo 'chat' esté presente
         if (!data || !data.chat) {
             logger.warning("Solicitud inválida, 'chat' es un campo requerido.");
             return res.status(400).json({ error: "Invalid input, 'chat' field is required." });
         }
-        // Generar IDs únicos
         const chatGroupId = (0, uuid_1.v4)();
         const analysisChatGroupId = (0, uuid_1.v4)();
-        // Extraer datos del cliente y vendedor
         const { country_client_phone_number = "No especificado", cliente_numero = "No especificado", vendedor_numero = "No especificado", client_name = "No especificado", assistance = "No especificado", start_time = new Date().toISOString(), end_time = new Date().toISOString(), } = data;
-        // Calcular la duración en milisegundos
         let durationInMilliseconds = "0";
         try {
             durationInMilliseconds = calculateDuration(start_time, end_time);
-            console.log(durationInMilliseconds); // "6001" (milisegundos)
         }
         catch (e) {
             logger.error(`Error al calcular la duración: ${e}`);
             return res.status(400).json({ error: "Invalid date format", details: e.toString() });
         }
-        // Convertir la duración a segundos (opcional)
         const durationInSeconds = (parseInt(durationInMilliseconds) / 1000).toFixed(2);
-        // Guardar detalles del chat
         const chatDetailsSaved = yield saveChatDetails(data.chat, chatGroupId, cliente_numero, vendedor_numero);
         if (!chatDetailsSaved) {
             logger.error("Error al guardar los detalles del chat.");
             return res.status(500).json({ error: "Error saving chat details" });
         }
-        // Filtrar mensajes por tipo (vendedor o cliente)
         const chatMessages = data.chat;
-        const vendedorText = filterMessages(chatMessages, true); // Mensajes del vendedor
-        const clienteText = filterMessages(chatMessages, false); // Mensajes del cliente
-        // Validar que haya mensajes del vendedor y del cliente
+        const vendedorText = filterMessages(chatMessages, true);
+        const clienteText = filterMessages(chatMessages, false);
         if (!vendedorText.trim()) {
             logger.warning("No se encontraron mensajes del vendedor.");
             return res.status(400).json({ error: "No vendor messages found" });
@@ -244,112 +235,105 @@ app.post("/analyze", (req, res) => __awaiter(void 0, void 0, void 0, function* (
             logger.warning("No se encontraron mensajes del cliente.");
             return res.status(400).json({ error: "No client messages found" });
         }
-        // Crear prompts para el análisis
         const prompts = createAnalysisPrompts(vendedorText, clienteText);
-        // Generar respuestas para todos los prompts usando Gemini
         const greetingsResponse = yield generateResponseFromGemini(prompts.greetings);
         const goodbyeResponse = yield generateResponseFromGemini(prompts.goodbyes);
         const sentimentResponse = yield generateResponseFromGemini(prompts.sentiment);
         const sentimentTagResponse = yield generateResponseFromGemini(prompts.sentimentTag);
         const problemResolutionResponse = yield generateResponseFromGemini(prompts.problemResolution);
-        // Contar tokens de entrada y salida
         const inputTokens = countTokens(vendedorText + clienteText);
         const outputTokens = countTokens(greetingsResponse + goodbyeResponse + sentimentResponse + sentimentTagResponse + problemResolutionResponse);
         const totalTokens = inputTokens + outputTokens;
-        // Procesar las respuestas
         const greetingsRulePass = processBooleanResponse(greetingsResponse);
         const goodbyeRulePass = processBooleanResponse(goodbyeResponse);
         const sentimentalTag = processSentimentResponse(sentimentTagResponse);
         const problemResolved = processBooleanResponse(problemResolutionResponse);
-        // Convertir respuestas de texto a "sí" o "no"
         const formatTextResponse = (response) => {
-            const lowerResponse = response.toLowerCase();
-            return lowerResponse.includes("yes") || lowerResponse.includes("sí") ? "sí" : "no";
+            return response.toLowerCase().includes("yes") || response.toLowerCase().includes("sí") ? "sí" : "no";
         };
         const greetingsText = formatTextResponse(greetingsResponse);
         const goodbyeText = formatTextResponse(goodbyeResponse);
         const problemResolutionText = formatTextResponse(problemResolutionResponse);
-        // Crear el resumen del chat
         const chatSummary = {
-            chat: {
-                chat_group: chatGroupId,
-                "analysis.chat_group": analysisChatGroupId,
-                client_name: client_name,
-                country_client_phone_number: country_client_phone_number,
-                cliente_numero: cliente_numero,
-                vendedor_numero: vendedor_numero,
-                assitance: assistance,
-                start_time: start_time,
-                end_time: end_time,
-                duration: durationInSeconds,
-                "analysis.greetings_rule_pass": greetingsRulePass,
-                "analysis.goodbye_rule_pass": goodbyeRulePass,
-                sentimental_analysis: sentimentResponse,
-                "analysis.sentimental_analysis": sentimentalTag,
-                "analysis.resolved_problem": problemResolved,
-                "analysis.total_tokens": {
-                    input_tokens: inputTokens,
-                    output_tokens: outputTokens,
-                    total_tokens: totalTokens,
-                },
-                created_at: new Date().toISOString(),
-                rules: "greetings",
-                raw_responses: {
-                    "analysis.greetings_rule_pass": greetingsText,
-                    "analysis.goodbye_rule_pass": goodbyeText,
-                    greeting: "Hola, buenos días.",
-                    client_query: "Quisiera saber el estado de mi pedido con el número 123456.",
-                    assistance_response: "Claro, déjame verificar el estado de tu pedido.",
-                    status_update: "Tu pedido está en camino y llegará en 2 días.",
-                    client_acknowledgment: "Gracias por la información.",
-                    goodbye: "Que tengas un buen día.",
-                },
-                _id: (0, uuid_1.v4)(), // ID único para el chat
-            },
-            _id: (0, uuid_1.v4)(), // ID único para el documento
+            chat_group: chatGroupId,
+            analysis_chat_group: analysisChatGroupId,
+            cliente_name: client_name,
+            cliente_phone_number: country_client_phone_number,
+            cliente_numero: cliente_numero,
+            vendedor_numero: vendedor_numero,
+            assistance: assistance,
+            start_time: start_time,
+            end_time: end_time,
+            duration: durationInSeconds,
+            analysis_greetings_rule_pass: greetingsRulePass,
+            analysis_goodbye_rule_pass: goodbyeRulePass,
+            sentimental_analysis: sentimentResponse,
+            analysis_sentimental_analysis: sentimentalTag,
+            analysis_resolved_problem: problemResolved,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            total_tokens: totalTokens,
+            created_at: new Date().toISOString(),
+            rules: "greetings",
+            raw_responses_analysis_greetings_rule_pass: greetingsText,
+            raw_responses_analysis_goodbye_rule_pass: goodbyeText,
+            raw_responses_greeting: "Hola, buenos días.",
+            raw_responses_client_query: "Quisiera saber el estado de mi pedido con el número 123456.",
+            raw_responses_assistance_response: "Claro, déjame verificar el estado de tu pedido.",
+            raw_responses_status_update: "Tu pedido está en camino y llegará en 2 días.",
+            raw_responses_client_acknowledgment: "Gracias por la información.",
+            raw_responses_goodbye: "Que tengas un buen día.",
+            chat_id: (0, uuid_1.v4)(),
+            document_id: (0, uuid_1.v4)()
         };
-        // Guardar el resumen del chat en MongoDB
         try {
             const result = yield chatsCollection.insertOne(chatSummary);
-            chatSummary.chat["_id"] = result.insertedId.toString(); // Agregar el ID generado
+            chatSummary.chat_id = result.insertedId.toString();
         }
         catch (e) {
             logger.error(`Error al guardar en MongoDB: ${e}`);
             return res.status(500).json({ error: "Database error", details: e.toString() });
         }
         logger.info(`Análisis exitoso para el grupo de chat ${chatGroupId}`);
-        return res.json(chatSummary); // Devolver el resumen del chat
+        return res.json(chatSummary);
     }
     catch (e) {
         logger.error(`Error al analizar el chat: ${e}`);
         return res.status(500).json({ error: "Internal server error", details: e.toString() });
     }
 }));
-// Endpoint GET /chats
 app.get("/chats", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Obtener parámetros de paginación
         const page = parseInt(req.query.page) || 1;
         const perPage = parseInt(req.query.per_page) || 10;
+        // Validar parámetros de paginación
+        if (isNaN(page) || isNaN(perPage) || page < 1 || perPage < 1) {
+            return res.status(400).json({ error: "Parámetros de paginación inválidos" });
+        }
+        // Limitar perPage a un máximo de 100 para evitar cargas pesadas
+        const maxPerPage = 100;
+        const safePerPage = Math.min(perPage, maxPerPage);
         // Calcular el skip
-        const skip = (page - 1) * perPage;
+        const skip = (page - 1) * safePerPage;
         // Obtener total de documentos
         const total = yield chatsCollection.countDocuments({});
+        // Obtener chats paginados
         const chats = yield chatsCollection.find({})
-            .sort({ _id: -1 })
+            .sort({ _id: -1 }) // Ordenar por _id descendente
             .skip(skip)
-            .limit(perPage)
+            .limit(safePerPage)
             .toArray();
         // Convertir _id a string
-        chats.forEach((chat) => {
-            chat._id = chat._id.toString();
-        });
+        const formattedChats = chats.map(chat => (Object.assign(Object.assign({}, chat), { _id: chat._id.toString() })));
+        // Calcular total_pages usando el enfoque de Python
+        const totalPages = Math.ceil(total / safePerPage);
         return res.json({
             total,
             page,
-            per_page: perPage,
-            total_pages: Math.ceil(total / perPage),
-            chats,
+            per_page: safePerPage,
+            total_pages: totalPages,
+            chats: formattedChats,
         });
     }
     catch (e) {
@@ -361,7 +345,13 @@ app.get("/chats", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
 app.get("/chat_details/:chat_group", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const chatGroup = req.params.chat_group;
-        const details = yield chatDetailsCollection.find({ chat_group: chatGroup }, { projection: { _id: 0 } }).sort({ sequence: 1 }).toArray();
+        // Validar que chat_group no esté vacío y tenga un formato válido (UUID)
+        if (!chatGroup || !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(chatGroup)) {
+            return res.status(400).json({ error: "chat_group es inválido o no tiene un formato UUID válido" });
+        }
+        // Obtener detalles del chat
+        const details = yield chatDetailsCollection.find({ chat_group: chatGroup }, { projection: { _id: 0 } } // Excluir el campo _id
+        ).sort({ sequence: 1 }).toArray();
         if (details.length > 0) {
             return res.json({ chat_detail: details });
         }
@@ -376,8 +366,14 @@ app.get("/chat_details/:chat_group", (req, res) => __awaiter(void 0, void 0, voi
 app.get("/chats_by_group/:chat_group", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const chatGroup = req.params.chat_group;
+        // Validar que chat_group no esté vacío y tenga un formato válido (UUID)
+        if (!chatGroup || !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(chatGroup)) {
+            return res.status(400).json({ error: "chat_group es inválido o no tiene un formato UUID válido" });
+        }
+        // Obtener el chat por chat_group
         const chat = yield chatsCollection.findOne({ 'chat.chat_group': chatGroup });
         if (chat) {
+            // Convertir _id a string
             chat._id = chat._id.toString();
             return res.json(chat);
         }
